@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>summarize.py app: real three-bullet summaries in the browser</title>
+<!--
+  Design decisions (R-31, one line each; shared identity with index.html):
+  - Same palette and type system as the landing: warm near-black, cream text,
+    one amber accent, native mono + Georgia serif. One product, one face.
+  - Layout: a single input-to-result flow, because this page has exactly one
+    job. No dashboard shell, no stat cards, no sections that fill a template.
+  - The server config (50,000 characters, 5 summaries/hour per user) is shown
+    honestly as a note: real limits, from app.py, so a rate-limit error never
+    surprises anyone (R-17, R-23).
+  - States are required, not bonus: validation (empty), loading, provider
+    error, and success all render with a next action (R-27).
+  - Motion: hover/focus states only, plus one honest status line while the
+    request runs. Reduced-motion users get the same feedback, instantly (R-19).
+-->
+<style>
+  :root {
+    --bg: #0f0d0a;
+    --panel: #17130e;
+    --line: #2c251c;
+    --text: #ece5d8;
+    --muted: #a89d8b;
+    --accent: #ffb454;
+    --accent-soft: #b07a2e;
+    --err: #ff8f6b;
+    --font-mono: ui-monospace, "Cascadia Mono", Consolas, "JetBrains Mono", monospace;
+    --font-serif: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: clamp(0.95rem, 1.5vw, 1.05rem);
+    line-height: 1.65;
+  }
+
+  a, button, summary, label.file-label { cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  .wrap {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 0 clamp(1.25rem, 4vw, 2.5rem);
+  }
+
+  header.site {
+    border-bottom: 1px solid var(--line);
+    padding: 0.9rem 0;
+  }
+  header.site .wrap {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .wordmark {
+    color: var(--text);
+    text-decoration: none;
+    font-size: 1.05rem;
+    font-weight: 700;
+    padding: 0.55rem 0;
+  }
+  .wordmark .ext { color: var(--accent); }
+  nav.links { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+  nav.links a {
+    color: var(--muted);
+    text-decoration: none;
+    padding: 0.55rem 0.9rem;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    border-radius: 4px;
+  }
+  nav.links a:hover, nav.links a:active {
+    color: var(--text);
+    background: var(--panel);
+  }
+
+  main { padding: clamp(2rem, 5vw, 3.5rem) 0 3rem; }
+
+  h1 {
+    font-family: var(--font-serif);
+    font-weight: 600;
+    font-size: clamp(1.7rem, 4vw, 2.4rem);
+    line-height: 1.2;
+    margin: 0 0 0.75rem;
+    max-width: 34rem;
+  }
+  .page-note { color: var(--muted); margin: 0 0 2rem; max-width: 40rem; }
+
+  .form-panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: clamp(1rem, 3vw, 1.5rem);
+  }
+  .field-label {
+    display: block;
+    font-size: 0.9rem;
+    color: var(--muted);
+    margin-bottom: 0.5rem;
+  }
+  textarea {
+    width: 100%;
+    min-height: 11rem;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--text);
+    font: inherit;
+    padding: 0.85rem;
+    resize: vertical;
+  }
+  textarea:focus-visible { outline: none; border-color: var(--accent-soft); }
+
+  .file-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 0.9rem;
+    flex-wrap: wrap;
+  }
+  .file-label {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0.4rem 1rem;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  .file-label:hover { color: var(--text); border-color: var(--accent-soft); }
+  #file-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  .file-name { color: var(--muted); font-size: 0.85rem; }
+
+  .submit-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-top: 1.1rem;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 48px;
+    padding: 0.7rem 1.4rem;
+    background: var(--accent);
+    color: #241a08;
+    border: none;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    font-weight: 700;
+  }
+  .btn:hover { background: #ffc570; }
+  .btn:active { background: #e79a33; }
+  .char-count { color: var(--muted); font-size: 0.85rem; }
+
+  .result {
+    margin-top: 1.5rem;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: clamp(1rem, 3vw, 1.5rem);
+    min-height: 5rem;
+  }
+  .result h2 {
+    font-family: var(--font-serif);
+    font-weight: 600;
+    font-size: 1.15rem;
+    margin: 0 0 0.6rem;
+  }
+  .result .hint { color: var(--muted); margin: 0; }
+  .result .status { color: var(--accent); margin: 0; }
+  .result .err { color: var(--err); margin: 0; }
+  .result ul { margin: 0 0 0.75rem; padding-left: 1.4rem; }
+  .result .meta { color: var(--muted); font-size: 0.82rem; margin: 0.6rem 0 0; }
+  .copy-btn {
+    min-height: 44px;
+    padding: 0.3rem 1rem;
+    background: var(--bg);
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+  }
+  .copy-btn:hover { color: var(--text); border-color: var(--accent-soft); }
+  .copy-btn:active { color: var(--accent); }
+
+  .limits-note {
+    margin-top: 1.25rem;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+
+  footer.site {
+    border-top: 1px solid var(--line);
+    padding: 1.5rem 0;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+
+  @media (max-width: 560px) {
+    footer.site .wrap { display: block; }
+  }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="wordmark" href="/">summarize<span class="ext">.py</span></a>
+    <nav class="links" aria-label="Main">
+      <a href="/">Home</a>
+      <a href="/#how">How it works</a>
+      <a href="/#setup">Setup</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+    <h1>The same script, in your browser.</h1>
+    <p class="page-note">
+      This page calls the same pipeline as the command line: your text goes
+      to the configured LLM with one strict instruction, and three bullet
+      points come back. The API key never leaves the server.
+    </p>
+
+    <div class="form-panel">
+      <form id="sum-form" novalidate>
+        <label class="field-label" for="text-input">Your text</label>
+        <textarea id="text-input" name="text"
+                  placeholder="Paste an article, notes, or any long text here."></textarea>
+
+        <div class="file-row">
+          <label class="file-label" for="file-input">Load a .txt file</label>
+          <input id="file-input" name="file" type="file" accept=".txt,.text,text/plain">
+          <span class="file-name" id="file-name"></span>
+        </div>
+
+        <div class="submit-row">
+          <button class="btn" type="submit">Summarize this text</button>
+          <span class="char-count" id="char-count" aria-live="polite">0 / 50,000 characters</span>
+        </div>
+      </form>
+    </div>
+
+    <div class="result" id="result" aria-live="polite">
+      <h2>Summary</h2>
+      <p class="hint">Nothing summarized yet. Submit text above and the three bullets land here.</p>
+    </div>
+
+    <p class="limits-note">
+      Server limits, set in app.py: one summary per submit, up to 50,000
+      characters of text, and 5 summaries per hour per user, so the API key
+      and its quota are not burned by strangers.
+    </p>
+  </div>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>A learning project: Python, argparse, Flask, and one LLM API key.</span>
+    <span>summarize.py</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  var MAX_CHARS = 50000;
+  var form = document.getElementById("sum-form");
+  var input = document.getElementById("text-input");
+  var count = document.getElementById("char-count");
+  var fileInput = document.getElementById("file-input");
+  var fileName = document.getElementById("file-name");
+  var result = document.getElementById("result");
+
+  function h(tag, text, cls) {
+    var el = document.createElement(tag);
+    el.textContent = text;
+    if (cls) el.className = cls;
+    return el;
+  }
+
+  function render(node) {
+    result.textContent = "";
+    var heading = h("h2", "Summary");
+    result.appendChild(heading);
+    result.appendChild(node);
+  }
+
+  function showEmpty() {
+    render(h("p", "Nothing summarized yet. Submit text above and the three bullets land here.", "hint"));
+  }
+
+  function showError(message) {
+    render(h("p", "error: " + message, "err"));
+  }
+
+  function showLoading() {
+    render(h("p", "sending to the API ...", "status"));
+  }
+
+  function showBulletError(message) {
+    var p = h("p", "error: " + message, "err");
+    var retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "copy-btn";
+    retry.textContent = "Show input again";
+    retry.addEventListener("click", function () {
+      form.scrollIntoView({ block: "start" });
+      input.focus();
+    });
+    var box = document.createElement("div");
+    box.appendChild(p);
+    box.appendChild(retry);
+    render(box);
+  }
+
+  input.addEventListener("input", function () {
+    var len = input.value.length;
+    count.textContent = len.toLocaleString() + " / 50,000 characters";
+    if (len > MAX_CHARS) {
+      count.textContent += " (over the limit)";
+    }
+  });
+
+  fileInput.addEventListener("change", function () {
+    var file = fileInput.files && fileInput.files[0];
+    if (!file) { fileName.textContent = ""; return; }
+    var reader = new FileReader();
+    reader.onload = function () {
+      var text = String(reader.result || "");
+      input.value = text;
+      input.dispatchEvent(new Event("input"));
+      fileName.textContent = "loaded: " + file.name;
+    };
+    reader.onerror = function () {
+      fileName.textContent = "could not read " + file.name;
+    };
+    reader.readAsText(file);
+  });
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var text = input.value.trim();
+    if (!text) {
+      showBulletError("the text box is empty. Paste something first.");
+      return;
+    }
+    if (text.length > MAX_CHARS) {
+      showBulletError("text is " + text.length.toLocaleString() +
+        " characters. Trim it to 50,000 or load a shorter file.");
+      return;
+    }
+    showLoading();
+    fetch("/api/summarize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text })
+    })
+      .then(function (res) {
+        return res.json().then(function (data) { return { ok: res.ok, data: data }; });
+      })
+      .then(function (res) {
+        if (!res.ok) {
+          showError(res.data.error || "unknown server error. Try again.");
+          return;
+        }
+        var list = document.createElement("ul");
+        res.data.bullets.forEach(function (b) {
+          list.appendChild(h("li", b));
+        });
+        var copy = document.createElement("button");
+        copy.type = "button";
+        copy.className = "copy-btn";
+        copy.textContent = "Copy summary";
+        copy.addEventListener("click", function () {
+          var plain = res.data.bullets.join("\n");
+          function done() {
+            copy.textContent = "Copied";
+            window.setTimeout(function () { copy.textContent = "Copy summary"; }, 1500);
+          }
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(plain).then(done);
+          } else {
+            var ta = document.createElement("textarea");
+            ta.value = plain;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            ta.remove();
+            done();
+          }
+        });
+        var box = document.createElement("div");
+        box.appendChild(list);
+        box.appendChild(copy);
+        box.appendChild(h("p",
+          "summarized by " + res.data.model + " (" + res.data.provider +
+          "), via the server's .env key.", "meta"));
+        render(box);
+      })
+      .catch(function () {
+        showError("the server did not answer. Is app.py running? Try again.");
+      });
+  });
+
+  showEmpty();
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>summarize.py: turn any text file into three bullet points</title>
+<!--
+  Design decisions (R-31, one line each):
+  - Theme: fixed dark, because the product IS a terminal tool and its native home is dark (R-21).
+  - Palette: warm near-black base + cream text + ONE amber accent taken from amber-phosphor CRT
+    terminals; amber appears only at the focal moments (wordmark, caret, CTA) (R-01, R-29).
+  - Typography: native system monospace (no webfont) because the product lives in a terminal;
+    serif headings (Georgia) give the editorial voice an authored counterpoint (R-06).
+  - Layout: hero with a WORKING simulated terminal (the product is a CLI, so the demo is evidence,
+    clearly labeled "Simulated demo", never disguised as a real screenshot) (R-05, R-23, R-38).
+  - Pipeline section shows the tool's real 4-step flow, not a 3-step icon template (R-05).
+  - No FAQ: no real user questions exist yet (R-28). No stats or testimonials: no real data (R-17, R-18).
+  - Motion dial is 1: hover/focus states + the demo's own typing output only; reduced-motion
+    users get instant output and a static caret (R-19).
+-->
+<style>
+  :root {
+    --bg: #0f0d0a;
+    --panel: #17130e;
+    --line: #2c251c;
+    --text: #ece5d8;
+    --muted: #a89d8b;
+    --accent: #ffb454;
+    --accent-soft: #b07a2e;
+    --font-mono: ui-monospace, "Cascadia Mono", Consolas, "JetBrains Mono", monospace;
+    --font-serif: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: clamp(0.95rem, 1.5vw, 1.05rem);
+    line-height: 1.65;
+  }
+
+  a, button, summary { cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  .wrap {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 0 clamp(1.25rem, 4vw, 2.5rem);
+  }
+
+  /* Header */
+  header.site {
+    border-bottom: 1px solid var(--line);
+    padding: 0.9rem 0;
+  }
+  header.site .wrap {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .wordmark {
+    color: var(--text);
+    text-decoration: none;
+    font-size: 1.05rem;
+    font-weight: 700;
+    padding: 0.55rem 0;
+  }
+  .wordmark .ext { color: var(--accent); }
+  nav.links { display: flex; gap: 0.4rem; }
+  nav.links a {
+    color: var(--muted);
+    text-decoration: none;
+    padding: 0.55rem 0.9rem;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    border-radius: 4px;
+  }
+  nav.links a:hover, nav.links a:active {
+    color: var(--text);
+    background: var(--panel);
+  }
+
+  /* Hero */
+  .hero {
+    padding: clamp(3rem, 8vw, 5.5rem) 0 clamp(2.5rem, 6vw, 4rem);
+  }
+  .hero .wrap {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: clamp(1.5rem, 4vw, 3.5rem);
+    align-items: start;
+  }
+  h1 {
+    font-family: var(--font-serif);
+    font-weight: 600;
+    font-size: clamp(1.9rem, 4.5vw, 3rem);
+    line-height: 1.15;
+    margin: 0 0 1rem;
+  }
+  .hero p.lede {
+    color: var(--muted);
+    margin: 0 0 1.75rem;
+    max-width: 30rem;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 48px;
+    padding: 0.7rem 1.4rem;
+    background: var(--accent);
+    color: #241a08;
+    border: none;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    font-weight: 700;
+    text-decoration: none;
+  }
+  .btn:hover { background: #ffc570; }
+  .btn:active { background: #e79a33; }
+  .hero .api-note {
+    margin-top: 1.25rem;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+
+  /* Terminal */
+  .terminal {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .terminal-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.55rem 1rem;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg);
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .terminal-bar .sim {
+    color: var(--accent);
+    border: 1px solid var(--accent-soft);
+    border-radius: 3px;
+    padding: 0 0.45rem;
+    font-size: 0.75rem;
+  }
+  .terminal-screen {
+    padding: 1rem 1rem 1.25rem;
+    min-height: 21rem;
+    font-size: clamp(0.82rem, 1.6vw, 0.92rem);
+  }
+  .terminal-output {
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text);
+    margin: 0 0 0.75rem;
+  }
+  .terminal-output .ok { color: var(--accent); }
+  .terminal-output .err { color: #ff8f6b; }
+  .terminal-output .dim { color: var(--muted); }
+  .prompt-line {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+  .prompt-line label {
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  #term-input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font: inherit;
+    padding: 0.55rem 0;
+    min-height: 44px;
+  }
+  #term-input:focus-visible {
+    outline: none;
+  }
+  .prompt-line {
+    border-bottom: 1px solid var(--line);
+  }
+  .prompt-line:focus-within {
+    border-bottom-color: var(--accent-soft);
+  }
+  .caret-note { color: var(--muted); font-size: 0.75rem; margin-top: 0.5rem; }
+
+  /* Pipeline */
+  .pipeline {
+    border-top: 1px solid var(--line);
+    padding: clamp(2.5rem, 6vw, 4.5rem) 0;
+  }
+  .pipeline h2, .setup h2 {
+    font-family: var(--font-serif);
+    font-weight: 600;
+    font-size: clamp(1.4rem, 3vw, 1.9rem);
+    margin: 0 0 1.75rem;
+  }
+  .steps { margin: 0; padding: 0; list-style: none; }
+  .steps li {
+    display: grid;
+    grid-template-columns: 3.5rem minmax(0, 1fr);
+    gap: 1rem;
+    padding: 1.1rem 0;
+    border-top: 1px solid var(--line);
+  }
+  .steps li:last-child { border-bottom: 1px solid var(--line); }
+  .steps .num {
+    color: var(--accent);
+    font-weight: 700;
+  }
+  .steps strong { display: block; margin-bottom: 0.2rem; }
+  .steps p { margin: 0; color: var(--muted); }
+
+  /* Setup */
+  .setup {
+    border-top: 1px solid var(--line);
+    padding: clamp(2.5rem, 6vw, 4.5rem) 0;
+  }
+  .setup .cols {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: clamp(1.5rem, 4vw, 3rem);
+    align-items: start;
+  }
+  .setup .cols > p { color: var(--muted); margin: 0 0 1rem; }
+  code.inline {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 0.1rem 0.4rem;
+    font-size: 0.9em;
+  }
+  .codeblock {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 1rem 1rem 0.9rem;
+    margin: 0 0 1.25rem;
+    position: relative;
+  }
+  .codeblock pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.88rem;
+    color: var(--text);
+  }
+  .copy-btn {
+    position: absolute;
+    top: 0.6rem;
+    right: 0.6rem;
+    min-height: 34px;
+    padding: 0.2rem 0.8rem;
+    background: var(--bg);
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+  }
+  .copy-btn:hover { color: var(--text); border-color: var(--accent-soft); }
+  .copy-btn:active { color: var(--accent); }
+  .codeblock .cap {
+    display: block;
+    font-size: 0.78rem;
+    color: var(--muted);
+    margin-top: 0.6rem;
+  }
+
+  /* Footer */
+  footer.site {
+    border-top: 1px solid var(--line);
+    padding: 1.5rem 0;
+  }
+  footer.site .wrap {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+
+  /* Reflow: content-defined break. Below ~900px the two-column hero
+     and setup wrap; below ~560px single column, terminal-first. */
+  @media (max-width: 900px) {
+    .hero .wrap, .setup .cols { grid-template-columns: 1fr; }
+    .hero .intro { order: 1; }
+    .hero .terminal { order: 2; }
+  }
+  @media (max-width: 560px) {
+    .steps li { grid-template-columns: 2.4rem minmax(0, 1fr); }
+    nav.links a { padding: 0.55rem 0.7rem; }
+    footer.site .wrap { flex-direction: column; }
+  }
+
+  .type-cursor {
+    display: inline-block;
+    width: 0.55em;
+    height: 1em;
+    background: var(--accent);
+    vertical-align: text-bottom;
+    animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .type-cursor {
+      animation: none;
+    }
+  }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="wordmark" href="#top">summarize<span class="ext">.py</span></a>
+    <nav class="links" aria-label="Main">
+      <a href="#demo">Demo</a>
+      <a href="#how">How it works</a>
+      <a href="#setup">Setup</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <div class="wrap">
+      <div class="intro">
+        <h1>Any text file in, three bullet points out, straight from your terminal.</h1>
+        <p class="lede">
+          A small Python command-line tool that reads a document,
+          sends it to an LLM with one strict instruction,
+          and prints a short summary. No GUI, no tabs to switch.
+        </p>
+        <a class="btn" id="try-demo" href="#demo">Try the demo</a>
+        <a class="btn" href="/app" style="background: transparent; color: var(--accent); border: 1px solid var(--accent-soft);">Open the real tool</a>
+        <p class="api-note">
+          Needs Python 3, one API key (OpenAI or Google Gemini),
+          and nothing else running.
+        </p>
+      </div>
+
+      <div class="terminal" id="demo">
+        <div class="terminal-bar">
+          <span>Terminal. Simulated demo: responses here are canned examples, not live API calls.</span>
+          <span class="sim">Simulated</span>
+        </div>
+        <div class="terminal-screen">
+          <div class="terminal-output" id="term-output" role="log" aria-live="polite" aria-label="Terminal output"></div>
+          <div class="prompt-line">
+            <label for="term-input">&gt;</label>
+            <input id="term-input" name="terminal-command" type="text"
+                   autocomplete="off" spellcheck="false"
+                   aria-label="Type a command. Try: help">
+          </div>
+          <p class="caret-note">Try: help, summarize, summarize sample-article.txt, summarize missing.txt, clear</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="pipeline" id="how">
+    <div class="wrap">
+      <h2>What the script does, in the order it does it</h2>
+      <ol class="steps">
+        <li>
+          <span class="num" aria-hidden="true">01</span>
+          <div>
+            <strong>Parse the command line</strong>
+            <p>argparse takes one required argument: the path to the text file, so the call reads like plain shell: <code class="inline">python summarize.py document.txt</code>.</p>
+          </div>
+        </li>
+        <li>
+          <span class="num" aria-hidden="true">02</span>
+          <div>
+            <strong>Read the file</strong>
+            <p>Python's built-in file handling loads the document into a string. A missing or empty file stops here with a clear message instead of a wasted API call.</p>
+          </div>
+        </li>
+        <li>
+          <span class="num" aria-hidden="true">03</span>
+          <div>
+            <strong>Build one strict prompt</strong>
+            <p>The system prompt casts the model as an expert editor and demands a summary of exactly three bullet points. The file content rides along as the user message.</p>
+          </div>
+        </li>
+        <li>
+          <span class="num" aria-hidden="true">04</span>
+          <div>
+            <strong>Print the summary</strong>
+            <p>The API response comes back and lands in the terminal, formatted and clean. dotenv keeps the API key in .env, out of the code.</p>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="setup" id="setup">
+    <div class="wrap">
+      <h2>Run it yourself</h2>
+      <div class="cols">
+        <div>
+          <p>
+            Three dependencies, one environment file. The key never
+            enters the script: <code class="inline">dotenv</code> loads it from
+            <code class="inline">.env</code> at runtime, and the file stays in
+            <code class="inline">.gitignore</code>.
+          </p>
+          <p>
+            Works with the OpenAI API or Google's Gemini API:
+            only the request call changes, the pipeline stays the same.
+          </p>
+        </div>
+        <div>
+          <div class="codeblock">
+            <button class="copy-btn" type="button" data-copy="pip install openai python-dotenv">Copy</button>
+            <pre>pip install openai python-dotenv</pre>
+            <span class="cap">Install the two packages the script needs.</span>
+          </div>
+          <div class="codeblock">
+            <button class="copy-btn" type="button" data-copy="OPENAI_API_KEY=your-key-here">Copy</button>
+            <pre>.env
+OPENAI_API_KEY=your-key-here</pre>
+            <span class="cap">Your key in .env, never committed.</span>
+          </div>
+          <div class="codeblock">
+            <button class="copy-btn" type="button" data-copy="python summarize.py document.txt">Copy</button>
+            <pre>python summarize.py document.txt</pre>
+            <span class="cap">The whole interface. One path, one summary.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>A learning project: Python, argparse, and one LLM API key.</span>
+    <span>summarize.py</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  var output = document.getElementById("term-output");
+  var input = document.getElementById("term-input");
+  var reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function print(lines) {
+    var span = document.createElement("span");
+    span.textContent = lines.join("\n") + "\n\n";
+    output.appendChild(span);
+    output.scrollIntoView({ block: "nearest" });
+  }
+
+  function printHTML(nodes) {
+    nodes.forEach(function (n) { output.appendChild(n); });
+    output.appendChild(document.createTextNode("\n\n"));
+  }
+
+  function line(text, cls) {
+    var span = document.createElement("span");
+    span.textContent = text + "\n";
+    if (cls) span.className = cls;
+    return span;
+  }
+
+  /* Typing effect for "loading" output only; instant under reduced motion. */
+  function printLoading(text, done) {
+    var wrap = document.createElement("span");
+    var node = document.createTextNode("");
+    var cursor = document.createElement("span");
+    cursor.className = "type-cursor";
+    cursor.setAttribute("aria-hidden", "true");
+    wrap.appendChild(node);
+    wrap.appendChild(cursor);
+    output.appendChild(wrap);
+    if (reducedMotion) {
+      node.textContent = text + "\n";
+      cursor.remove();
+      done();
+      return;
+    }
+    var i = 0;
+    var timer = window.setInterval(function () {
+      node.textContent = text.slice(0, ++i);
+      if (i >= text.length) {
+        window.clearInterval(timer);
+        node.textContent = text + "\n";
+        cursor.remove();
+        done();
+      }
+    }, 35);
+  }
+
+  var CANNED_SUMMARY =
+    "  - The article argues that terminal tools still beat GUI apps for\n" +
+    "    single-purpose tasks because they compose with other commands.\n" +
+    "  - It walks a reader through building one: parse input, do the work,\n" +
+    "    print a clean result.\n" +
+    "  - The closing point: small scripts that do one thing well age better\n" +
+    "    than month-long framework bets.";
+
+  var HELP =
+    "Available commands:\n" +
+    "  help                      show this list\n" +
+    "  summarize                 summarize a sample article (canned demo)\n" +
+    "  summarize missing.txt     see the not-found error state\n" +
+    "  summarize empty.txt       see the empty-file state\n" +
+    "  clear                     wipe the screen";
+
+  var STATE = "ready";
+
+  function runCommand(raw) {
+    var cmd = raw.trim();
+    if (!cmd) return;
+    print(["> " + cmd]);
+
+    var parts = cmd.split(/\s+/);
+    var name = parts[0].toLowerCase();
+
+    if (name === "clear") {
+      output.textContent = "";
+      return;
+    }
+    if (name === "help") {
+      print([HELP]);
+      return;
+    }
+    if (name === "summarize") {
+      return runSummarize(parts[1] || "");
+    }
+    print([
+      "unknown command: " + name,
+      "Try 'help' to see what this demo understands."
+    ], "dim");
+  }
+
+  function runSummarize(file) {
+    if (STATE === "busy") {
+      print([
+        "still working on the previous summary. Wait a moment."
+      ], "err");
+      return;
+    }
+    if (file === "missing.txt") {
+      print([
+        "error: file not found: missing.txt",
+        "Check the path and try again. Nothing was sent to the API."
+      ], "err");
+      return;
+    }
+    if (file === "empty.txt") {
+      print([
+        "error: empty.txt contains no text.",
+        "There is nothing to summarize. Pick a file with content."
+      ], "err");
+      return;
+    }
+    STATE = "busy";
+    var target = file || "sample-article.txt";
+    printLoading("reading " + target + " ... sending to the API ...", function () {
+      printHTML([
+        line("Summary of " + target + ":", "ok"),
+        line(CANNED_SUMMARY)
+      ]);
+      STATE = "ready";
+    });
+  }
+
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") {
+      var value = input.value;
+      input.value = "";
+      runCommand(value);
+    }
+  });
+
+  document.getElementById("try-demo").addEventListener("click", function () {
+    window.setTimeout(function () { input.focus(); }, 400);
+  });
+
+  document.querySelectorAll(".copy-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var text = btn.getAttribute("data-copy");
+      function done() {
+        var old = btn.textContent;
+        btn.textContent = "Copied";
+        window.setTimeout(function () { btn.textContent = old; }, 1500);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done);
+      } else {
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+        done();
+      }
+    });
+  });
+
+  /* First-screen hint instead of a blank terminal (empty state with a next action). */
+  printHTML([
+    line("summarize.py simulated demo. Type 'help' for commands.", "ok")
+  ]);
+})();
+</script>
+
+</body>
+</html>
